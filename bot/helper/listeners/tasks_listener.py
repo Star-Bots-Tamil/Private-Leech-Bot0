@@ -1,540 +1,477 @@
-from random import choice
-from time import time
-from pytz import timezone
+from urllib.parse import urlparse
+from base64 import b64encode
 from datetime import datetime
-from urllib.parse import unquote, quote
-from requests import utils as rutils
-from aiofiles.os import path as aiopath, remove as aioremove, listdir, makedirs
-from os import walk, path as ospath
+from os import path as ospath
+from pkg_resources import get_distribution
+from aiofiles import open as aiopen
+from aiofiles.os import remove as aioremove, path as aiopath, mkdir
+from re import match as re_match
+from time import time
 from html import escape
-from aioshutil import move
-from asyncio import create_subprocess_exec, sleep, Event
+from uuid import uuid4
+from subprocess import run as srun
+from asyncio import create_subprocess_exec, create_subprocess_shell, run_coroutine_threadsafe, sleep
+from asyncio.subprocess import PIPE
+from functools import partial, wraps
+from concurrent.futures import ThreadPoolExecutor
+
+from aiohttp import ClientSession as aioClientSession
+from psutil import virtual_memory, cpu_percent, disk_usage
+from requests import get as rget
+from mega import MegaApi
 from pyrogram.enums import ChatType
+from pyrogram.types import BotCommand
+from pyrogram.errors import PeerIdInvalid
 
-from bot import OWNER_ID, Interval, aria2, download_dict, download_dict_lock, LOGGER, bot_name, DATABASE_URL, MAX_SPLIT_SIZE, config_dict, status_reply_dict_lock, user_data, non_queued_up, non_queued_dl, queued_up, queued_dl, queue_dict_lock, bot, GLOBAL_EXTENSION_FILTER
-from bot.helper.ext_utils.bot_utils import extra_btns, sync_to_async, get_readable_file_size, get_readable_time, is_mega_link, new_thread
-from bot.helper.ext_utils.files_utils import get_base_name, get_path_size, clean_download, split_file, process_file, clean_target, is_first_archive_split, is_archive, is_archive_split, join_files
-from bot.helper.ext_utils.exceptions import NotSupportedExtractionArchive
-from bot.helper.ext_utils.task_manager import start_from_queued
-from bot.helper.mirror_leech_utils.status_utils.extract_status import ExtractStatus
-from bot.helper.mirror_leech_utils.status_utils.zip_status import ZipStatus
-from bot.helper.mirror_leech_utils.status_utils.split_status import SplitStatus
-from bot.helper.mirror_leech_utils.status_utils.gdrive_status import GdriveStatus
-from bot.helper.mirror_leech_utils.status_utils.telegram_status import TelegramStatus
-from bot.helper.mirror_leech_utils.status_utils.rclone_status import RcloneStatus
-from bot.helper.mirror_leech_utils.status_utils.queue_status import QueueStatus
-from bot.helper.mirror_leech_utils.upload_utils.gdriveTools import GoogleDriveHelper
-from bot.helper.mirror_leech_utils.upload_utils.telegramEngine import TgUploader
-from bot.helper.mirror_leech_utils.rclone_utils.transfer import RcloneTransferHelper
-from bot.helper.telegram_helper.message_utils import sendCustomMsg, sendMessage, editMessage, delete_all_messages, delete_links, sendMultiMessage, update_all_messages, deleteMessage, five_minute_del
-from bot.helper.telegram_helper.button_build import ButtonMaker
 from bot.helper.ext_utils.db_handler import DbManager
+from bot import OWNER_ID, bot_name, DATABASE_URL, LOGGER, aria2, download_dict, download_dict_lock, botStartTime, user_data, config_dict, bot_loop, extra_buttons, user
+from bot.helper.telegram_helper.bot_commands import BotCommands
+from bot.helper.telegram_helper.button_build import ButtonMaker
+from bot.helper.ext_utils.telegraph_helper import telegraph
+from bot.helper.ext_utils.shorteners import short_url
+from bot.helper.aeon_utils.tinyfy import tinyfy
 
 
-class MirrorLeechListener:
-    def __init__(self, message, compress=False, extract=False, isQbit=False, isLeech=False, tag=None, select=False, seed=False, sameDir=None, rcFlags=None, upPath=None, isClone=False, join=False, isYtdlp=False, drive_id=None, index_link=None, attachment=None, files_utils={}):
-        if sameDir is None:
-            sameDir = {}
-        self.message = message
-        self.uid = message.id
-        self.extract = extract
-        self.compress = compress
-        self.isQbit = isQbit
-        self.isLeech = isLeech
-        self.isClone = isClone
-        self.isYtdlp = isYtdlp
-        self.tag = tag
-        self.seed = seed
-        self.newDir = ""
-        self.dir = f"/usr/src/app/downloads/{self.uid}"
-        self.select = select
-        self.isSuperGroup = message.chat.type in [ChatType.SUPERGROUP, ChatType.CHANNEL]
-        self.isPrivate = message.chat.type == ChatType.BOT
-        self.suproc = None
-        self.sameDir = sameDir
-        self.rcFlags = rcFlags
-        self.upPath = upPath
-        self.join = join
-        self.linkslogmsg = None
-        self.botpmmsg = None
-        self.drive_id = drive_id
-        self.index_link = index_link
-        self.files_utils = files_utils
-        self.attachment = attachment
+if config_dict.get('GDRIVE_ID'):
+    commands = [
+        'MirrorCommand', 'LeechCommand', 'YtdlCommand', 'YtdlLeechCommand', 
+        'CloneCommand', 'MediaInfoCommand', 'CountCommand', 'ListCommand', 'SearchCommand', 
+        'UserSetCommand', 'StatusCommand', 'StatsCommand', 'StopAllCommand', 
+        'HelpCommand', 'BotSetCommand', 'LogCommand', 'RestartCommand'
+    ]
+else:
+    commands = [
+        'LeechCommand', 'YtdlLeechCommand', 'MediaInfoCommand', 'SearchCommand', 
+        'UserSetCommand', 'StatusCommand', 'StatsCommand', 'StopAllCommand', 
+        'HelpCommand', 'BotSetCommand', 'LogCommand', 'RestartCommand'
+    ]
 
-    async def clean(self):
-        try:
-            async with status_reply_dict_lock:
-                if Interval:
-                    Interval[0].cancel()
-                    Interval.clear()
-            await sync_to_async(aria2.purge)
-            await delete_all_messages()
-        except:
-            pass
+command_descriptions = {
+    'MirrorCommand': '- Start mirroring',
+    'LeechCommand': '- Start leeching',
+    'YtdlCommand': '- Mirror yt-dlp supported link',
+    'YtdlLeechCommand': '- Leech through yt-dlp supported link',
+    'CloneCommand': '- Copy file/folder to Drive',
+    'MediaInfoCommand': '- Get MediaInfo',
+    'CountCommand': '- Count file/folder on Google Drive.',
+    'ListCommand': '- Search in Drive',
+    'SearchCommand': '- Search in Torrent',
+    'UserSetCommand': '- User settings',
+    'StatusCommand': '- Get mirror status message',
+    'StatsCommand': '- Check Bot & System stats',
+    'StopAllCommand': '- Cancel all tasks added by you to the bot.',
+    'HelpCommand': '- Get detailed help',
+    'BotSetCommand': '- [ADMIN] Open Bot settings',
+    'LogCommand': '- [ADMIN] View log',
+    'RestartCommand': '- [ADMIN] Restart the bot'
+}
 
-    async def onDownloadStart(self):
-        if config_dict['LEECH_LOG_ID']:
-            msg = f'<b>Task Started</b>\n\n'
-            msg += f'<b>⎔ Task by:</b> {self.tag}\n'
-            msg += f'<b>⎔ User ID: </b><code>{self.message.from_user.id}</code>'
-            self.linkslogmsg = await sendCustomMsg(config_dict['LEECH_LOG_ID'], msg)
-        user_dict = user_data.get(self.message.from_user.id, {})
-        self.botpmmsg = await sendCustomMsg(self.message.from_user.id, '<b>Task started</b>')
 
-    async def onDownloadComplete(self):
-        multi_links = False
+THREADPOOL = ThreadPoolExecutor(max_workers = 1000)
+MAGNET_REGEX = r'magnet:\?xt=urn:(btih|btmh):[a-zA-Z0-9]*\s*'
+URL_REGEX = r'^(?!\/)(rtmps?:\/\/|mms:\/\/|rtsp:\/\/|https?:\/\/|ftp:\/\/)?([^\/:]+:[^\/@]+@)?(www\.)?(?=[^\/:\s]+\.[^\/:\s]+)([^\/:\s]+\.[^\/:\s]+)(:\d+)?(\/[^#\s]*[\s\S]*)?(\?[^#\s]*)?(#.*)?$'
+SIZE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+STATUS_START = 0
+PAGES = 1
+PAGE_NO = 1
+STATUS_LIMIT = 4
+
+class MirrorStatus:
+    STATUS_UPLOADING = "Uploading"
+    STATUS_DOWNLOADING = "Downloading"
+    STATUS_CLONING = "Cloning"
+    STATUS_QUEUEDL = "DL queued"
+    STATUS_QUEUEUP = "UL queued"
+    STATUS_PAUSED = "Paused"
+    STATUS_ARCHIVING = "Archiving"
+    STATUS_EXTRACTING = "Extracting"
+    STATUS_SPLITTING = "Splitting"
+    STATUS_CHECKING = "CheckUp"
+    STATUS_SEEDING = "Seeding"
+    STATUS_PROCESSING = "Processing"
+
+
+class setInterval:
+    def __init__(self, interval, action):
+        self.interval = interval
+        self.action = action
+        self.task = bot_loop.create_task(self.__set_interval())
+
+    async def __set_interval(self):
         while True:
-            if self.sameDir:
-                if self.sameDir['total'] in [1, 0] or self.sameDir['total'] > 1 and len(self.sameDir['tasks']) > 1:
-                    break
-            else:
-                break
-            await sleep(0.2)
-        async with download_dict_lock:
-            if self.sameDir and self.sameDir['total'] > 1:
-                self.sameDir['tasks'].remove(self.uid)
-                self.sameDir['total'] -= 1
-                folder_name = self.sameDir['name']
-                spath = f"{self.dir}/{folder_name}"
-                des_path = f"/usr/src/app/downloads/{list(self.sameDir['tasks'])[0]}/{folder_name}"
-                await makedirs(des_path, exist_ok=True)
-                for item in await listdir(spath):
-                    if item.endswith(('.aria2', '.!qB')):
-                        continue
-                    item_path = f"{self.dir}/{folder_name}/{item}"
-                    if item in await listdir(des_path):
-                        await move(item_path, f'{des_path}/{self.uid}-{item}')
-                    else:
-                        await move(item_path, f'{des_path}/{item}')
-                multi_links = True
-            download = download_dict[self.uid]
-            name = str(download.name()).replace('/', '')
-            gid = download.gid()
-        LOGGER.info(f"Download completed: {name}")
-        if multi_links:
-            await self.onUploadError('Downloaded! Starting other part of the Task...')
-            return
-        if name == "None" or self.isQbit or not await aiopath.exists(f"{self.dir}/{name}"):
-            try:
-                files = await listdir(self.dir)
-            except Exception as e:
-                await self.onUploadError(str(e))
-                return
-            name = files[-1]
-            if name == "yt-dlp-thumb":
-                name = files[0]
+            await sleep(self.interval)
+            await self.action()
 
-        dl_path = f"{self.dir}/{name}"
-        up_path = ''
-        size = await get_path_size(dl_path)
-        async with queue_dict_lock:
-            if self.uid in non_queued_dl:
-                non_queued_dl.remove(self.uid)
-        await start_from_queued()
-        user_dict = user_data.get(self.message.from_user.id, {})
-        
-        if self.join:
-            if await aiopath.isdir(dl_path):
-                await join_files(dl_path)
+    def cancel(self):
+        self.task.cancel()
 
-        if self.extract:
-            pswd = self.extract if isinstance(self.extract, str) else ''
-            try:
-                if await aiopath.isfile(dl_path):
-                    up_path = get_base_name(dl_path)
-                LOGGER.info(f"Extracting: {name}")
-                async with download_dict_lock:
-                    download_dict[self.uid] = ExtractStatus(
-                        name, size, gid, self)
-                if await aiopath.isdir(dl_path):
-                    if self.seed:
-                        self.newDir = f"{self.dir}10000"
-                        up_path = f"{self.newDir}/{name}"
-                    else:
-                        up_path = dl_path
-                    for dirpath, _, files in await sync_to_async(walk, dl_path, topdown=False):
-                        for file_ in files:
-                            if is_first_archive_split(file_) or is_archive(file_) and not file_.endswith('.rar'):
-                                f_path = ospath.join(dirpath, file_)
-                                t_path = dirpath.replace(
-                                    self.dir, self.newDir) if self.seed else dirpath
-                                cmd = ["7z", "x", f"-p{pswd}", f_path, f"-o{t_path}", "-aot", "-xr!@PaxHeader"]
-                                if not pswd:
-                                    del cmd[2]
-                                if self.suproc == 'cancelled' or self.suproc is not None and self.suproc.returncode == -9:
-                                    return
-                                self.suproc = await create_subprocess_exec(*cmd)
-                                code = await self.suproc.wait()
-                                if code == -9:
-                                    return
-                                elif code != 0:
-                                    LOGGER.error('Unable to extract archive splits!')
-                        if not self.seed and self.suproc is not None and self.suproc.returncode == 0:
-                            for file_ in files:
-                                if is_archive_split(file_) or is_archive(file_):
-                                    del_path = ospath.join(dirpath, file_)
-                                    try:
-                                        await aioremove(del_path)
-                                    except:
-                                        return
-                else:
-                    if self.seed:
-                        self.newDir = f"{self.dir}10000"
-                        up_path = up_path.replace(self.dir, self.newDir)
-                    cmd = ["7z", "x", f"-p{pswd}", dl_path, f"-o{up_path}", "-aot", "-xr!@PaxHeader"]
-                    if not pswd:
-                        del cmd[2]
-                    if self.suproc == 'cancelled':
-                        return
-                    self.suproc = await create_subprocess_exec(*cmd)
-                    code = await self.suproc.wait()
-                    if code == -9:
-                        return
-                    elif code == 0:
-                        LOGGER.info(f"Extracted Path: {up_path}")
-                        if not self.seed:
-                            try:
-                                await aioremove(dl_path)
-                            except:
-                                return
-                    else:
-                        LOGGER.error(
-                            'Unable to extract archive! Uploading anyway')
-                        self.newDir = ""
-                        up_path = dl_path
-            except NotSupportedExtractionArchive:
-                LOGGER.info("Not any valid archive, uploading file as it is.")
-                self.newDir = ""
-                up_path = dl_path
 
-        if self.compress:
-            pswd = self.compress if isinstance(self.compress, str) else ''
-            if up_path:
-                dl_path = up_path
-                up_path = f"{up_path}.zip"
-            elif self.seed and self.isLeech:
-                self.newDir = f"{self.dir}10000"
-                up_path = f"{self.newDir}/{name}.zip"
-            else:
-                up_path = f"{dl_path}.zip"
-            async with download_dict_lock:
-                download_dict[self.uid] = ZipStatus(name, size, gid, self)
-            LEECH_SPLIT_SIZE = MAX_SPLIT_SIZE
-            cmd = ["7z", f"-v{LEECH_SPLIT_SIZE}b", "a",
-                   "-mx=0", f"-p{pswd}", up_path, dl_path]
-            for ext in GLOBAL_EXTENSION_FILTER:
-                ex_ext = f'-xr!*.{ext}'
-                cmd.append(ex_ext)
-            if self.isLeech and int(size) > LEECH_SPLIT_SIZE:
-                if not pswd:
-                    del cmd[4]
-                LOGGER.info(f'Zip: orig_path: {dl_path}, zip_path: {up_path}.0*')
-            else:
-                del cmd[1]
-                if not pswd:
-                    del cmd[3]
-                LOGGER.info(f'Zip: orig_path: {dl_path}, zip_path: {up_path}')
-            if self.suproc == 'cancelled':
-                return
-            self.suproc = await create_subprocess_exec(*cmd)
-            code = await self.suproc.wait()
-            if code == -9:
-                return
-            elif not self.seed:
-                await clean_target(dl_path)
+def isMkv(file):
+    return file.lower().endswith('mkv')
 
-        if not self.compress and not self.extract:
-            up_path = dl_path
 
-        up_dir, up_name = up_path.rsplit('/', 1)
-        size = await get_path_size(up_dir)
-        if self.isLeech:
-            m_size = []
-            o_files = []
-            if not self.compress:
-                checked = False
-                LEECH_SPLIT_SIZE = MAX_SPLIT_SIZE
-                for dirpath, _, files in await sync_to_async(walk, up_dir, topdown=False):
-                    for file_ in files:
-                        f_path = ospath.join(dirpath, file_)
-                        f_size = await aiopath.getsize(f_path)
-                        if f_size > LEECH_SPLIT_SIZE:
-                            if not checked:
-                                checked = True
-                                async with download_dict_lock:
-                                    download_dict[self.uid] = SplitStatus(up_name, size, gid, self)
-                                LOGGER.info(f"Splitting: {up_name}")
-                            res = await split_file(f_path, f_size, file_, dirpath, LEECH_SPLIT_SIZE, self)
-                            if not res:
-                                return
-                            if res == "errored":
-                                if f_size <= MAX_SPLIT_SIZE:
-                                    continue
-                                try:
-                                    await aioremove(f_path)
-                                except:
-                                    return
-                            elif not self.seed or self.newDir:
-                                try:
-                                    await aioremove(f_path)
-                                except:
-                                    return
-                            else:
-                                m_size.append(f_size)
-                                o_files.append(file_)
+def get_readable_file_size(size_in_bytes: int):
+    if size_in_bytes is None:
+        return "0B"
+    index = 0
+    while size_in_bytes >= 1024 and index < len(SIZE_UNITS) - 1:
+        size_in_bytes /= 1024
+        index += 1
+    return (
+        f"{size_in_bytes:.2f}{SIZE_UNITS[index]}"
+        if index > 0
+        else f"{size_in_bytes:.2f}B"
+    )
 
-        up_limit = config_dict['QUEUE_UPLOAD']
-        all_limit = config_dict['QUEUE_ALL']
-        added_to_queue = False
-        async with queue_dict_lock:
-            dl = len(non_queued_dl)
-            up = len(non_queued_up)
-            if (all_limit and dl + up >= all_limit and (not up_limit or up >= up_limit)) or (up_limit and up >= up_limit):
-                added_to_queue = True
-                LOGGER.info(f"Added to Queue/Upload: {name}")
-                event = Event()
-                queued_up[self.uid] = event
-        if added_to_queue:
-            async with download_dict_lock:
-                download_dict[self.uid] = QueueStatus(
-                    name, size, gid, self, 'Up')
-            await event.wait()
-            async with download_dict_lock:
-                if self.uid not in download_dict:
-                    return
-            LOGGER.info(f'Start from Queued/Upload: {name}')
-        async with queue_dict_lock:
-            non_queued_up.add(self.uid)
-        if self.isLeech:
-            size = await get_path_size(up_dir)
-            for s in m_size:
-                size = size - s
-            LOGGER.info(f"Leech Name: {up_name}")
-            tg = TgUploader(up_name, up_dir, self)
-            tg_upload_status = TelegramStatus(
-                tg, size, self.message, gid, 'up')
-            async with download_dict_lock:
-                download_dict[self.uid] = tg_upload_status
-            await update_all_messages()
-            await tg.upload(o_files, m_size, size)
-        elif self.upPath == 'gd':
-            size = await get_path_size(up_path)
-            LOGGER.info(f"Upload Name: {up_name}")
-            drive = GoogleDriveHelper(up_name, up_dir, self)
-            upload_status = GdriveStatus(drive, size, self.message, gid, 'up')
-            async with download_dict_lock:
-                download_dict[self.uid] = upload_status
-            await update_all_messages()
-            await sync_to_async(drive.upload, up_name, size, self.drive_id)
+
+async def getDownloadByGid(gid):
+    async with download_dict_lock:
+        return next((dl for dl in download_dict.values() if len(gid) >= 8 and dl.gid().startswith(gid)), None)
+
+
+async def getAllDownload(req_status, user_id=None):
+    dls = []
+    async with download_dict_lock:
+        for dl in list(download_dict.values()):
+            if user_id and user_id != dl.message.from_user.id:
+                continue
+            status = dl.status()
+            if req_status in ['all', status]:
+                dls.append(dl)
+    return dls
+
+
+async def get_user_tasks(user_id, maxtask):
+    if tasks := await getAllDownload('all', user_id):
+        return len(tasks) >= maxtask
+
+
+def bt_selection_buttons(id_):
+    gid = id_[:8]
+    pincode = ''.join([n for n in id_ if n.isdigit()][:4])
+    buttons = ButtonMaker()
+    BASE_URL = config_dict['BASE_URL']
+    buttons.ubutton("Select", f"{BASE_URL}/app/files/{id_}")
+    buttons.ibutton("Pincode", f"btsel pin {gid} {pincode}")
+    buttons.ibutton("Cancel", f"btsel rm {gid} {id_}")
+    buttons.ibutton("Done Selecting", f"btsel done {gid} {id_}")
+    return buttons.build_menu(2)
+
+
+async def get_telegraph_list(telegraph_content):
+    path = [(await telegraph.create_page(title="Drive Search", content=content))["path"] for content in telegraph_content]
+    if len(path) > 1:
+        await telegraph.edit_telegraph(path, telegraph_content)
+    buttons = ButtonMaker()
+    buttons.ubutton("View", f"https://telegra.ph/{path[0]}")
+    buttons = extra_btns(buttons)
+    return buttons.build_menu(1)
+
+
+def handleIndex(index, dic):
+    while True:
+        if abs(index) < len(dic):
+            break
+        if index < 0: index = len(dic) - abs(index)
+        elif index > 0: index = index - len(dic)
+    return index
+
+
+async def fetch_user_tds(user_id, force=False):
+    user_dict = user_data.get(user_id, {})
+    if user_dict.get('td_mode', False) or force:
+        return user_dict.get('user_tds', {})
+    return {}
+
+
+def progress_bar(pct):
+    if isinstance(pct, str):
+        pct = float(pct.strip('%'))
+    p = min(max(pct, 0), 100)
+    cFull = int((p + 5)// 10)
+    p_str = '●' * cFull
+    p_str += '○' * (10 - cFull)
+    return p_str
+
+
+def source(self):
+    return (sender_chat.title if (sender_chat := self.message.sender_chat) else self.message.from_user.username or self.message.from_user.id)
+
+
+def get_readable_message():
+    msg = '<a href="https://t.me/Opleech_WD"><b>❖ 𝐖𝐃 𝐙𝐎𝐍𝐄 ❖ ™</b></a>'
+    msg += f'\n\n'
+    button = None
+    tasks = len(download_dict)
+    currentTime = get_readable_time(time() - botStartTime)
+    if config_dict['BOT_MAX_TASKS']:
+        bmax_task = f"/{config_dict['BOT_MAX_TASKS']}"
+    else:
+        bmax_task = ''
+    globals()['PAGES'] = (tasks + STATUS_LIMIT - 1) // STATUS_LIMIT
+    if PAGE_NO > PAGES and PAGES != 0:
+        globals()['STATUS_START'] = STATUS_LIMIT * (PAGES - 1)
+        globals()['PAGE_NO'] = PAGES
+    for download in list(download_dict.values())[STATUS_START:STATUS_LIMIT+STATUS_START]:
+        msg += f"<b>{download.status()}:</b> {escape(f'{download.name()}')}\n"
+        msg += f"by {source(download)}\n"
+        if download.status() not in [MirrorStatus.STATUS_SPLITTING, MirrorStatus.STATUS_SEEDING, MirrorStatus.STATUS_PROCESSING]:
+            msg += f"<blockquote><code>{progress_bar(download.progress())}</code> {download.progress()}"
+            msg += f"\n{download.processed_bytes()} of {download.size()}"
+            msg += f"\nSpeed: {download.speed()}"
+            msg += f'\nEstimated: {download.eta()}'
+            if hasattr(download, 'seeders_num'):
+                try:
+                    msg += f"\nSeeders: {download.seeders_num()} | Leechers: {download.leechers_num()}"
+                except:
+                    pass
+        elif download.status() == MirrorStatus.STATUS_SEEDING:
+            msg += f"<blockquote>Size: {download.size()}"
+            msg += f"\nSpeed: {download.upload_speed()}"
+            msg += f"\nUploaded: {download.uploaded_bytes()}"
+            msg += f"\nRatio: {download.ratio()}"
+            msg += f"\nTime: {download.seeding_time()}"
         else:
-            size = await get_path_size(up_path)
-            LOGGER.info(f"Upload Name: {up_name} via RClone")
-            RCTransfer = RcloneTransferHelper(self, up_name)
-            async with download_dict_lock:
-                download_dict[self.uid] = RcloneStatus(
-                    RCTransfer, self.message, gid, 'up')
-            await update_all_messages()
-            await RCTransfer.upload(up_path, size)
-
-    async def onUploadComplete(self, link, size, files, folders, mime_type, name, rclonePath=''):
-        user_id = self.message.from_user.id
-        name, _ = await process_file(name, user_id, isMirror=not self.isLeech)
-        user_dict = user_data.get(user_id, {})
-        msg = f'{escape(name)}\n\n'
-        msg += f'<blockquote><b>⎔ Size: </b>{get_readable_file_size(size)}\n'
-        msg += f'<b>⎔ Elapsed: </b>{get_readable_time(time() - self.message.date.timestamp())}\n'
-        LOGGER.info(f'Task Done: {name}')
+            msg += f"<blockquote>Size: {download.size()}"
+        msg += f"\nElapsed: {get_readable_time(time() - download.message.date.timestamp())}</blockquote>"
+        msg += f"\n<blockquote>/stop_{download.gid()[:8]}</blockquote>\n\n"
+    if len(msg) == 0:
+        return None, None
+    if tasks > STATUS_LIMIT:
         buttons = ButtonMaker()
-        iButton = ButtonMaker()
-        iButton.ibutton('⋞⋟ 𝐘𝐨𝐮𝐫 𝐅𝐢𝐋𝐞𝐬 ⋞⋟', f"aeon {user_id} private", 'header')
-        iButton = extra_btns(iButton)
-        if self.isLeech:
-            if folders > 1:
-                msg += f'<b>⎔ Total files: </b>{folders}\n'
-            if mime_type != 0:
-                msg += f'<b>⎔ Corrupted files: </b>{mime_type}\n'
-            msg += f'<b>⎔ User ID: </b><code>{self.message.from_user.id}</code>\n'
-            msg += f'<b>⎔ By: </b>{self.tag}</blockquote>\n\n'
-            if not files:
-                if self.isPrivate:
-                    msg += '<b>Files have not been sent for an unspecified reason</b>'
-                await sendMessage(self.message, msg)
+        buttons.ibutton("Prev", "status pre")
+        buttons.ibutton(f"{PAGE_NO}/{PAGES}", "status ref")
+        buttons.ibutton("Next", "status nex")
+        button = buttons.build_menu(3)
+    msg += f"<b>⎔ Tasks</b>: {tasks}{bmax_task}"
+    msg += f"\n<b>⎔ Bot uptime</b>: {currentTime}"
+    msg += f"\n<b>⎔ Free disk space</b>: {get_readable_file_size(disk_usage('/usr/src/app/downloads/').free)}"
+    return msg, button
+
+
+def text_to_bytes(size_text):
+    size_text = size_text.lower()
+    multiplier = {'k': 1024, 'm': 1048576, 'g': 1073741824, 't': 1099511627776, 'p': 1125899906842624}
+    for unit, factor in multiplier.items():
+        if unit in size_text:
+            size_value = float(size_text.split(unit)[0])
+            return size_value * factor
+    return 0
+
+
+async def turn_page(data):
+    global STATUS_START, PAGE_NO
+    async with download_dict_lock:
+        if data[1] == "nex":
+            if PAGE_NO == PAGES:
+                STATUS_START = 0
+                PAGE_NO = 1
             else:
-                attachmsg = True
-                fmsg, totalmsg = '\n\n', ''
-                lmsg = '<b>Files have been sent. Access them via the provided links.</b>'
-                for index, (link, name) in enumerate(files.items(), start=1):
-                    fmsg += f"{index}. <a href='{link}'>{name}</a>\n"
-                    totalmsg = (msg + lmsg + fmsg) if attachmsg else fmsg
-                    if len(totalmsg.encode()) > 3900:
-                        if self.linkslogmsg:
-                            await editMessage(self.linkslogmsg, totalmsg)
-                            await sendMessage(self.botpmmsg,  totalmsg)
-                            self.linkslogmsg = await sendMessage(self.linkslogmsg, "Fetching Details...")
-                        attachmsg = False
-                        await sleep(1)
-                        fmsg = '\n\n'
-                if fmsg != '\n\n':
-                    if self.linkslogmsg:
-                        await sendMessage(self.linkslogmsg, msg + lmsg + fmsg)
-                        await deleteMessage(self.linkslogmsg)
-                await sendMessage(self.botpmmsg, msg + lmsg + fmsg)
-                await deleteMessage(self.botpmmsg)
-                if self.isSuperGroup:
-                    await sendMessage(self.message, f'{msg}<b>🤣 POM POM Files sent to your inbox</b>', iButton.build_menu(1))
-                else:
-                    await deleteMessage(self.botpmmsg)
-            if self.seed:
-                if self.newDir:
-                    await clean_target(self.newDir)
-                async with queue_dict_lock:
-                    if self.uid in non_queued_up:
-                        non_queued_up.remove(self.uid)
-                await start_from_queued()
-                return
-        else:
-            if mime_type == "Folder":
-                msg += f'<b>⎔ Total files: </b>{files}\n'
-            if link:
-                buttons.ubutton('Cloud link', link)
-                INDEX_URL = self.index_link if self.drive_id else config_dict['INDEX_URL']
-                if not rclonePath:
-                    if INDEX_URL:
-                        url_path = rutils.quote(f'{name}')
-                        share_url = f'{INDEX_URL}/{url_path}'
-                        if mime_type == "Folder":
-                            share_url += '/'
-                        buttons.ubutton('Index link', share_url)
-                buttons = extra_btns(buttons)
-                button = buttons.build_menu(2)
-            elif rclonePath:
-                msg += f'<b>⎔ Path: </b><code>{rclonePath}</code>\n'
-                button = None
-                buttons = extra_btns(buttons)
-                button = buttons.build_menu(2)
-            msg += f'<b>⎔ User ID: </b><code>{self.message.from_user.id}</code>\n'
-            msg += f'<b>⎔ By: </b>{self.tag}</blockquote>\n\n'
-
-            if config_dict['MIRROR_LOG_ID']:
-                log_msg = list((await sendMultiMessage(config_dict['MIRROR_LOG_ID'], msg, button)).values())[0]
-                if self.linkslogmsg:
-                    await deleteMessage(self.linkslogmsg)
-            await sendMessage(self.botpmmsg, msg, button, 'Random')
-            await deleteMessage(self.botpmmsg)
-            if self.isSuperGroup:
-                await sendMessage(self.message, f'{msg} <b>Links has been sent to your inbox</b>', iButton.build_menu(1))
+                STATUS_START += STATUS_LIMIT
+                PAGE_NO += 1
+        elif data[1] == "pre":
+            if PAGE_NO == 1:
+                STATUS_START = STATUS_LIMIT * (PAGES - 1)
+                PAGE_NO = PAGES
             else:
-                await deleteMessage(self.botpmmsg)
-            if self.seed:
-                if self.newDir:
-                    await clean_target(self.newDir)
-                elif self.compress:
-                    await clean_target(f"{self.dir}/{name}")
-                async with queue_dict_lock:
-                    if self.uid in non_queued_up:
-                        non_queued_up.remove(self.uid)
-                await start_from_queued()
-                return
+                STATUS_START -= STATUS_LIMIT
+                PAGE_NO -= 1
 
-        await clean_download(self.dir)
-        async with download_dict_lock:
-            if self.uid in download_dict.keys():
-                del download_dict[self.uid]
-            count = len(download_dict)
-        if count == 0:
-            await self.clean()
+
+def get_readable_time(seconds, full_time=False):
+    periods = [('millennium', 31536000000), ('century', 3153600000), ('decade', 315360000), ('year', 31536000), ('month', 2592000), ('week', 604800), ('day', 86400), ('hour', 3600), ('minute', 60), ('second', 1)]
+    result = ''
+    for period_name, period_seconds in periods:
+        if seconds >= period_seconds:
+            period_value, seconds = divmod(seconds, period_seconds)
+            plural_suffix = 's' if period_value > 1 else ''
+            result += f'{int(period_value)} {period_name}{plural_suffix} '
+            if not full_time:
+                break
+    return result.strip()
+
+
+def is_magnet(url):
+    return bool(re_match(MAGNET_REGEX, url))
+
+
+def is_url(url):
+    return bool(re_match(URL_REGEX, url))
+
+
+def is_gdrive_link(url):
+    return "drive.google.com" in url
+
+
+def is_telegram_link(url):
+    return url.startswith(('https://t.me/', 'tg://openmessage?user_id='))
+
+
+def is_share_link(url):
+    domain = urlparse(url).hostname
+    return any(x in domain for x in ['appdirve', 'hubdrive', 'gdflix', 'filepress'])
+
+
+def is_mega_link(url):
+    return "mega.nz" in url or "mega.co.nz" in url
+
+
+def is_rclone_path(path):
+    return bool(re_match(r'^(mrcc:)?(?!magnet:)(?![- ])[a-zA-Z0-9_\. -]+(?<! ):(?!.*\/\/).*$|^rcl$', path))
+
+
+def get_mega_link_type(url):
+    return "folder" if "folder" in url or "/#F!" in url else "file"
+
+
+def arg_parser(items, arg_base):
+    if not items:
+        return arg_base
+    bool_arg_set = {'-b', '-e', '-z', '-s', '-j', '-d'}
+    t = len(items)
+    i = 0
+    arg_start = -1
+    while i + 1 <= t:
+        part = items[i].strip()
+        if part in arg_base:
+            if arg_start == -1:
+                arg_start = i
+            if i + 1 == t and part in bool_arg_set or part in ['-s', '-j']:
+                arg_base[part] = True
+            else:
+                sub_list = []
+                for j in range(i + 1, t):
+                    item = items[j].strip()
+                    if item in arg_base:
+                        if part in bool_arg_set and not sub_list:
+                            arg_base[part] = True
+                        break
+                    sub_list.append(item.strip())
+                    i += 1
+                if sub_list:
+                    arg_base[part] = " ".join(sub_list)
+        i += 1
+    link = []
+    if items[0].strip() not in arg_base:
+        if arg_start == -1:
+            link.extend(item.strip() for item in items)
         else:
-            await update_all_messages()
+            link.extend(items[r].strip() for r in range(arg_start))
+        if link:
+            arg_base['link'] = " ".join(link)
+    return arg_base
 
-        async with queue_dict_lock:
-            if self.uid in non_queued_up:
-                non_queued_up.remove(self.uid)
 
-        await start_from_queued()
-        await delete_links(self.message)
+async def get_content_type(url):
+    try:
+        async with aioClientSession(trust_env=True) as session:
+            async with session.get(url, verify_ssl=False) as response:
+                return response.headers.get('Content-Type')
+    except:
+        return None
 
-    async def onDownloadError(self, error, button=None):
-        async with download_dict_lock:
-            if self.uid in download_dict.keys():
-                del download_dict[self.uid]
-            count = len(download_dict)
-            if self.sameDir and self.uid in self.sameDir['tasks']:
-                self.sameDir['tasks'].remove(self.uid)
-                self.sameDir['total'] -= 1
-        msg = f'Hey, {self.tag}!\n'
-        msg += 'Your download has been stopped!\n\n'
-        msg += f'<blockquote><b>Reason:</b> {escape(error)}\n'
-        msg += f'<b>Elapsed:</b> {get_readable_time(time() - self.message.date.timestamp())}</blockquote>'
-        x = await sendMessage(self.message, msg, button)
-        await delete_links(self.message)
-        if self.botpmmsg:
-        	  await deleteMessage(self.botpmmsg)
-        if self.linkslogmsg:
-            await deleteMessage(self.linkslogmsg)
-        if count == 0:
-            await self.clean()
-        else:
-            await update_all_messages()
-        if self.isSuperGroup and self.botpmmsg:
-            await sendMessage(self.botpmmsg, msg, button)
-        await five_minute_del(x)
-        
-        async with queue_dict_lock:
-            if self.uid in queued_dl:
-                queued_dl[self.uid].set()
-                del queued_dl[self.uid]
-            if self.uid in queued_up:
-                queued_up[self.uid].set()
-                del queued_up[self.uid]
-            if self.uid in non_queued_dl:
-                non_queued_dl.remove(self.uid)
-            if self.uid in non_queued_up:
-                non_queued_up.remove(self.uid)
 
-        await start_from_queued()
-        await sleep(3)
-        await clean_download(self.dir)
-        if self.newDir:
-            await clean_download(self.newDir)
-    
-    async def onUploadError(self, error):
-        async with download_dict_lock:
-            if self.uid in download_dict.keys():
-                del download_dict[self.uid]
-            count = len(download_dict)
-        msg = f'Hey, {self.tag}!\n'
-        msg += 'Your upload has been stopped!\n\n'
-        msg += f'<blockquote><b>Reason:</b> {escape(error)}\n'
-        msg += f'<b>Elapsed:</b> {get_readable_time(time() - self.message.date.timestamp())}</blockquote>'
-        x = await sendMessage(self.message, msg)
-        if self.linkslogmsg:
-            await deleteMessage(self.linkslogmsg)
-        await delete_links(self.message)
-        if self.botpmmsg:
-         	  await deleteMessage(self.botpmmsg)
-        if count == 0:
-            await self.clean()
-        else:
-            await update_all_messages()
-        if self.isSuperGroup and self.botpmmsg:
-            await sendMessage(self.botpmmsg, msg)
-        await five_minute_del(x)
-        
-        async with queue_dict_lock:
-            if self.uid in queued_dl:
-                queued_dl[self.uid].set()
-                del queued_dl[self.uid]
-            if self.uid in queued_up:
-                queued_up[self.uid].set()
-                del queued_up[self.uid]
-            if self.uid in non_queued_dl:
-                non_queued_dl.remove(self.uid)
-            if self.uid in non_queued_up:
-                non_queued_up.remove(self.uid)
+def update_user_ldata(id_, key=None, value=None):
+    exception_keys = ['is_sudo', 'is_auth']
+    if not key and not value:
+        if id_ in user_data:
+            updated_data = {k: v for k, v in user_data[id_].items() if k in exception_keys}
+            user_data[id_] = updated_data
+        return
+    user_data.setdefault(id_, {})
+    user_data[id_][key] = value
 
-        await start_from_queued()
-        await sleep(3)
-        await clean_download(self.dir)
-        if self.newDir:
-            await clean_download(self.newDir)
+
+async def download_image_url(url):
+    path = "Images/"
+    if not await aiopath.isdir(path):
+        await mkdir(path)
+    image_name = url.split('/')[-1]
+    des_dir = ospath.join(path, image_name)
+    async with aioClientSession() as session:
+        async with session.get(url) as response:
+            if response.status == 200:
+                async with aiopen(des_dir, 'wb') as file:
+                    async for chunk in response.content.iter_chunked(1024):
+                        await file.write(chunk)
+                LOGGER.info(f"Image Downloaded Successfully as {image_name}")
+            else:
+                LOGGER.error(f"Failed to Download Image from {url}")
+    return des_dir
+
+
+async def cmd_exec(cmd, shell=False):
+    if shell:
+        proc = await create_subprocess_shell(cmd, stdout=PIPE, stderr=PIPE)
+    else:
+        proc = await create_subprocess_exec(*cmd, stdout=PIPE, stderr=PIPE)
+    stdout, stderr = await proc.communicate()
+    stdout = stdout.decode().strip()
+    stderr = stderr.decode().strip()
+    return stdout, stderr, proc.returncode
+
+
+def new_task(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        return bot_loop.create_task(func(*args, **kwargs))
+    return wrapper
+
+
+async def sync_to_async(func, *args, wait=True, **kwargs):
+    pfunc = partial(func, *args, **kwargs)
+    future = bot_loop.run_in_executor(THREADPOOL, pfunc)
+    return await future if wait else future
+
+
+def async_to_sync(func, *args, wait=True, **kwargs):
+    future = run_coroutine_threadsafe(func(*args, **kwargs), bot_loop)
+    return future.result() if wait else future
+
+
+def new_thread(func):
+    @wraps(func)
+    def wrapper(*args, wait=False, **kwargs):
+        future = run_coroutine_threadsafe(func(*args, **kwargs), bot_loop)
+        return future.result() if wait else future
+    return wrapper
+
+
+async def checking_access(user_id, button=None):
+    token_timeout = config_dict['TOKEN_TIMEOUT']
+    if not token_timeout:
+        return None, button
+    user_data.setdefault(user_id, {})
+    data = user_data[user_id]
+    if DATABASE_URL:
+        data['time'] = await DbManager().get_token_expiry(user_id)
+    expire = data.get('time')
+    isExpired = (expire is None or expire is not None and (time() - expire) > token_timeout)
+    if isExpired:
+        token = data['token'] if expire is None and 'token' in data else str(uuid4())
+        if expire is not None:
+            del data['time']
+        data['token'] = token
+        if DATABASE_URL:
+            await DbManager().update_user_token(user_id, token)
+        user_data[user_id].update(data)
+        time_str = get_readable_time(token_timeout, True)
+        if button is None:
+            button = ButtonMaker()
+        button.ubutton('Collect token', tinyfy(short_url(f'https://telegram.me/{bot_name}?start={token}')))
+        return f'Your token has expired, please collect a new token.\n<b>It will expire after {time_str}</b>!', button
+    return None, button
+
+
+def extra_btns(buttons):
+    if extra_buttons:
+        for btn_name, btn_url in extra_buttons.items():
+            buttons.ubutton(btn_name, btn_url)
+    return buttons
+
+
+commands = [BotCommand(getattr(BotCommands, cmd)[0] if isinstance(getattr(BotCommands, cmd), list) else getattr(BotCommands, cmd), command_descriptions[cmd]) for cmd in commands]
+
+async def set_commands(bot):
+    if config_dict['SET_COMMANDS']:
+        await bot.set_bot_commands(commands)
