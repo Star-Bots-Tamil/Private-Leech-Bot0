@@ -7,7 +7,7 @@ async def send_react(message):
         chat_info = await bot.get_chat(chat_id)
         available_reactions = chat_info.available_reactions
         
-        full_emoji_set = {'👌', '🔥', '🥰', '❤️', '❤️‍🔥', '💯', '⚡', '💋', '😘', '🤩', '😍'}
+        full_emoji_set = {'👀', '🔥', '🥰', '❤️', '❤️‍🔥', '💥', '⚡', '💋', '🌼', '🤩', '😍'}
         
         if available_reactions:
             if getattr(available_reactions, "all_are_enabled", False):
