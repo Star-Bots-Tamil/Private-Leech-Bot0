@@ -382,7 +382,7 @@ class MirrorLeechListener:
                 await sendMessage(self.botpmmsg, msg + lmsg + fmsg)
                 await deleteMessage(self.botpmmsg)
                 if self.isSuperGroup:
-                    await sendMessage(self.message, f'{msg}<b>🤣 POM POM Files sent to your inbox</b>', iButton.build_menu(1))
+                    await sendMessage(self.message, f'{msg}<b>📂 Files sent to your inbox</b>\n\n<a href="https://t.me/Opleech_WD"><b>❖ 𝐖𝐃 𝐙𝐎𝐍𝐄 ❖ ™</b></a>', iButton.build_menu(1))
                 else:
                     await deleteMessage(self.botpmmsg)
             if self.seed:
