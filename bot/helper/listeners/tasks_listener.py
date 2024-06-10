@@ -347,7 +347,7 @@ class MirrorLeechListener:
         LOGGER.info(f'Task Done: {name}')
         buttons = ButtonMaker()
         iButton = ButtonMaker()
-        iButton.ibutton('⋞⋟ 𝐘𝐨𝐮𝐫 𝐅𝐢𝐋𝐞𝐬 ⋞⋟', f"aeon {user_id} private", 'header')
+        iButton.ibutton('⬤≽≼ 𝐏𝐦 𝐘𝐨𝐮𝐫 𝐅𝐢𝐥𝐞𝐬 ≽≼⬤', f"aeon {user_id} private", 'header')
         iButton = extra_btns(iButton)
         if self.isLeech:
             if folders > 1:
