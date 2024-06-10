@@ -47,23 +47,23 @@ else:
     ]
 
 command_descriptions = {
-    'MirrorCommand': '- Start mirroring',
-    'LeechCommand': '- Start leeching',
-    'YtdlCommand': '- Mirror yt-dlp supported link',
-    'YtdlLeechCommand': '- Leech through yt-dlp supported link',
-    'CloneCommand': '- Copy file/folder to Drive',
-    'MediaInfoCommand': '- Get MediaInfo',
-    'CountCommand': '- Count file/folder on Google Drive.',
-    'ListCommand': '- Search in Drive',
-    'SearchCommand': '- Search in Torrent',
-    'UserSetCommand': '- User settings',
-    'StatusCommand': '- Get mirror status message',
-    'StatsCommand': '- Check Bot & System stats',
-    'StopAllCommand': '- Cancel all tasks added by you to the bot.',
-    'HelpCommand': '- Get detailed help',
-    'BotSetCommand': '- [ADMIN] Open Bot settings',
-    'LogCommand': '- [ADMIN] View log',
-    'RestartCommand': '- [ADMIN] Restart the bot'
+    'MirrorCommand': '🎥 Start mirroring',
+    'LeechCommand': '🎦 Start leeching',
+    'YtdlCommand': '🔗 Mirror yt-dlp supported link',
+    'YtdlLeechCommand': '🖇 Leech through yt-dlp supported link',
+    'CloneCommand': '📂 Copy file/folder to Drive',
+    'MediaInfoCommand': 'ℹ️ Get MediaInfo',
+    'CountCommand': '📂 Count file/folder on Google Drive.',
+    'ListCommand': '🔍 Search in Drive',
+    'SearchCommand': '🔍 Search in Torrent',
+    'UserSetCommand': '⚙️ User settings',
+    'StatusCommand': '📊 Get mirror status message',
+    'StatsCommand': '🤖 Check Bot & System stats',
+    'StopAllCommand': '❌ Cancel all tasks added by you to the bot.',
+    'HelpCommand': '🆘 Get detailed help',
+    'BotSetCommand': '🛠 [ADMIN] Open Bot settings',
+    'LogCommand': '🛠 [ADMIN] View log',
+    'RestartCommand': '🛠 [ADMIN] Restart the bot'
 }
 
 
