@@ -199,7 +199,8 @@ def source(self):
 
 
 def get_readable_message():
-    msg = '<b>Powered by Aeon</b>\n\n'
+    msg = '<a href="https://t.me/Opleech_WD"><b>❖ 𝐖𝐃 𝐙𝐎𝐍𝐄 ❖ ™</b></a>'
+    msg += f'\n\n'
     button = None
     tasks = len(download_dict)
     currentTime = get_readable_time(time() - botStartTime)
@@ -242,9 +243,9 @@ def get_readable_message():
         buttons.ibutton(f"{PAGE_NO}/{PAGES}", "status ref")
         buttons.ibutton("Next", "status nex")
         button = buttons.build_menu(3)
-    msg += f"<b>• Tasks</b>: {tasks}{bmax_task}"
-    msg += f"\n<b>• Bot uptime</b>: {currentTime}"
-    msg += f"\n<b>• Free disk space</b>: {get_readable_file_size(disk_usage('/usr/src/app/downloads/').free)}"
+    msg += f"<b>⎔ Tasks</b>: {tasks}{bmax_task}"
+    msg += f"\n<b>⎔ Bot uptime</b>: {currentTime}"
+    msg += f"\n<b>⎔ Free disk space</b>: {get_readable_file_size(disk_usage('/usr/src/app/downloads/').free)}"
     return msg, button
 
 
