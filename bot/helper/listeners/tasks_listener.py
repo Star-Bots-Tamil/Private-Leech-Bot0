@@ -76,8 +76,8 @@ class MirrorLeechListener:
     async def onDownloadStart(self):
         if config_dict['LEECH_LOG_ID']:
             msg = f'<b>Task Started</b>\n\n'
-            msg += f'<b>• Task by:</b> {self.tag}\n'
-            msg += f'<b>• User ID: </b><code>{self.message.from_user.id}</code>'
+            msg += f'<b>⎔ Task by:</b> {self.tag}\n'
+            msg += f'<b>⎔ User ID: </b><code>{self.message.from_user.id}</code>'
             self.linkslogmsg = await sendCustomMsg(config_dict['LEECH_LOG_ID'], msg)
         user_dict = user_data.get(self.message.from_user.id, {})
         self.botpmmsg = await sendCustomMsg(self.message.from_user.id, '<b>Task started</b>')
@@ -342,20 +342,20 @@ class MirrorLeechListener:
         name, _ = await process_file(name, user_id, isMirror=not self.isLeech)
         user_dict = user_data.get(user_id, {})
         msg = f'{escape(name)}\n\n'
-        msg += f'<blockquote><b>• Size: </b>{get_readable_file_size(size)}\n'
-        msg += f'<b>• Elapsed: </b>{get_readable_time(time() - self.message.date.timestamp())}\n'
+        msg += f'<blockquote><b>⎔ Size: </b>{get_readable_file_size(size)}\n'
+        msg += f'<b>⎔ Elapsed: </b>{get_readable_time(time() - self.message.date.timestamp())}\n'
         LOGGER.info(f'Task Done: {name}')
         buttons = ButtonMaker()
         iButton = ButtonMaker()
-        iButton.ibutton('View in inbox', f"aeon {user_id} private", 'header')
+        iButton.ibutton('⋞⋟ 𝐘𝐨𝐮𝐫 𝐅𝐢𝐋𝐞𝐬 ⋞⋟', f"aeon {user_id} private", 'header')
         iButton = extra_btns(iButton)
         if self.isLeech:
             if folders > 1:
-                msg += f'<b>• Total files: </b>{folders}\n'
+                msg += f'<b>⎔ Total files: </b>{folders}\n'
             if mime_type != 0:
-                msg += f'<b>• Corrupted files: </b>{mime_type}\n'
-            msg += f'<b>• User ID: </b><code>{self.message.from_user.id}</code>\n'
-            msg += f'<b>• By: </b>{self.tag}</blockquote>\n\n'
+                msg += f'<b>⎔ Corrupted files: </b>{mime_type}\n'
+            msg += f'<b>⎔ User ID: </b><code>{self.message.from_user.id}</code>\n'
+            msg += f'<b>⎔ By: </b>{self.tag}</blockquote>\n\n'
             if not files:
                 if self.isPrivate:
                     msg += '<b>Files have not been sent for an unspecified reason</b>'
@@ -382,7 +382,7 @@ class MirrorLeechListener:
                 await sendMessage(self.botpmmsg, msg + lmsg + fmsg)
                 await deleteMessage(self.botpmmsg)
                 if self.isSuperGroup:
-                    await sendMessage(self.message, f'{msg}<b>Files has been sent to your inbox</b>', iButton.build_menu(1))
+                    await sendMessage(self.message, f'{msg}<b>🤣 POM POM Files sent to your inbox</b>', iButton.build_menu(1))
                 else:
                     await deleteMessage(self.botpmmsg)
             if self.seed:
@@ -395,7 +395,7 @@ class MirrorLeechListener:
                 return
         else:
             if mime_type == "Folder":
-                msg += f'<b>• Total files: </b>{files}\n'
+                msg += f'<b>⎔ Total files: </b>{files}\n'
             if link:
                 buttons.ubutton('Cloud link', link)
                 INDEX_URL = self.index_link if self.drive_id else config_dict['INDEX_URL']
@@ -409,12 +409,12 @@ class MirrorLeechListener:
                 buttons = extra_btns(buttons)
                 button = buttons.build_menu(2)
             elif rclonePath:
-                msg += f'<b>• Path: </b><code>{rclonePath}</code>\n'
+                msg += f'<b>⎔ Path: </b><code>{rclonePath}</code>\n'
                 button = None
                 buttons = extra_btns(buttons)
                 button = buttons.build_menu(2)
-            msg += f'<b>• User ID: </b><code>{self.message.from_user.id}</code>\n'
-            msg += f'<b>• By: </b>{self.tag}</blockquote>\n\n'
+            msg += f'<b>⎔ User ID: </b><code>{self.message.from_user.id}</code>\n'
+            msg += f'<b>⎔ By: </b>{self.tag}</blockquote>\n\n'
 
             if config_dict['MIRROR_LOG_ID']:
                 log_msg = list((await sendMultiMessage(config_dict['MIRROR_LOG_ID'], msg, button)).values())[0]
